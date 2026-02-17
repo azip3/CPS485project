@@ -6,6 +6,23 @@ import numpy as np
 # Load your trained ASL model
 model = tf.keras.models.load_model('asl_model.h5')
 
+
+###load other model
+# Define a dummy function that mimics the old true_divide behavior
+
+#def true_divide_layer(x, y):
+#    return tf.math.divide(x, y)  # or simply x / y — same thing in TF 2.x
+
+
+
+### Load with custom_objects mapping the EXACT name
+#model = tf.keras.models.load_model(
+#    'asl_mobilenetv2_36classes (1).h5',
+#    custom_objects={'TrueDivide': true_divide_layer}
+#)
+#
+###
+
 # MediaPipe Hands setup (classic API - works with 0.10.14)
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
