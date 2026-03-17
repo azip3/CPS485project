@@ -62,7 +62,7 @@ while cap.isOpened():
         x_coords = [lm.x * w for lm in hand_landmarks.landmark]
         y_coords = [lm.y * h for lm in hand_landmarks.landmark]
 
-        # ── Square crop with generous padding ─────────────────────────────
+        # ── Square crop  ──────────────
         padding = 80
         x_min = max(0, int(min(x_coords)) - padding)
         y_min = max(0, int(min(y_coords)) - padding)
