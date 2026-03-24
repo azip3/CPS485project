@@ -216,3 +216,7 @@ Augmentation: RandomFlip (horizontal), RandomRotation (0.15), RandomZoom (0.2), 
 Phase 1: Adam(1e-3), up to 40 epochs, EarlyStopping(patience=7), ReduceLROnPlateau
 Phase 2: Adam(1e-5), unfreeze top 30 backbone layers, up to 20 epochs, EarlyStopping(patience=5)
 Saved as: asl_model3_v2.keras + class_names3.json
+
+## 3/17 - 3/24
+-**Training**
+Learned that I did not need to train in color for CNN. Swapped to training in Greyscale so I can train more photos from dataset.
