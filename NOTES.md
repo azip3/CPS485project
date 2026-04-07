@@ -220,3 +220,9 @@ Saved as: asl_model3_v2.keras + class_names3.json
 ## 3/17 - 3/24
 -**Training**
 Learned that I did not need to train in color for CNN. Swapped to training in Greyscale so I can train more photos from dataset.
+
+
+## 3/17 - 3/24
+-**Training**
+GreyScale was less optimal of a path than I thought. Only decreases load by 1/3 from the colors but comes with signifacnt losses in accuracy. 
+Started training on self captured data. Captures 300 images of my own hand making signs and incorporated to 3000 training images from Kaggle. Ten percent of  data comes from my own which should be minimal amount to make difference in learning from model. Will Increase by 5-10% increments to evaluate benefits.
