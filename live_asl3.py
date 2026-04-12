@@ -5,8 +5,10 @@ import numpy as np
 import json
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MODEL_PATH   = 'asl_model3_v2.keras'
-CLASSES_FILE = 'class_names3.json'
+#MODEL_PATH   = 'asl_model3_v2.keras'
+#CLASSES_FILE = 'class_names3.json'
+MODEL_PATH   = 'asl_model_5class.keras'
+CLASSES_FILE = 'class_names_5class.json'
 IMAGE_SIZE   = (160, 160)
 CONF_THRESH  = 0.3
 TOP_N        = 3

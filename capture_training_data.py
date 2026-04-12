@@ -22,7 +22,9 @@ IMAGE_SIZE          = (160, 160)     # Match model 3 training resolution
 OUTPUT_DIR          = 'webcam_training_data'
 CAPTURES_PER_LETTER = 300            # Target images per letter
 CAPTURE_DELAY       = 0.15           # Seconds between captures
-TARGET_LETTERS      = ['A', 'M', 'N', 'O', 'T']
+# TARGET_LETTERS      = ['A', 'M', 'N', 'O', 'T']
+TARGET_LETTERS      = ['T']
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Create output directory automatically
