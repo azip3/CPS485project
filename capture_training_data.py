@@ -1,14 +1,16 @@
 """
-ASL Webcam Training Data Capture
-Captures hand crops for problem letters: A, N, M, O, T
+ASL Webcam Training Data Capture (224x224)
+Captures hand crops for all ASL letters (A-Z + space)
 
 Controls:
-    SPACE  = Start / Pause capturing for current letter
-    N      = Skip to next letter (saves whatever you have)
-    Q      = Quit early (saves whatever you have)
+    SPACE      = Start / Pause capturing for current letter
+    TAB        = Skip to next letter (saves whatever you have)
+    A-Z keys   = Jump directly to that letter
+    ESC        = Quit early (saves whatever you have)
 
-Images are saved to: webcam_training_data/<LETTER>/
-Run from your project folder: python3 capture_training_data.py
+Images APPEND to existing data — safe to run multiple times.
+Saves to: webcam_training_data_224/<LETTER>/
+Run from your project folder: python3 capture_training_data_224.py
 """
 
 import cv2
@@ -18,19 +20,31 @@ import os
 import time
 
 # ── Config ────────────────────────────────────────────────────────────────────
-IMAGE_SIZE          = (160, 160)     # Match model 3 training resolution
-OUTPUT_DIR          = 'webcam_training_data'
-CAPTURES_PER_LETTER = 300            # Target images per letter
-CAPTURE_DELAY       = 0.15           # Seconds between captures
-# TARGET_LETTERS      = ['A', 'M', 'N', 'O', 'T']
-TARGET_LETTERS      = ['T']
-
+IMAGE_SIZE          = (224, 224)
+OUTPUT_DIR          = 'webcam_training_data_224'
+CAPTURES_PER_LETTER = 300
+CAPTURE_DELAY       = 0.15
+TARGET_LETTERS      = [chr(65 + i) for i in range(26)]  # A-Z (all 26)
+TARGET_LETTERS.append('space')                            # 27 total
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Create output directory automatically
+# Build lookup: key code -> index in TARGET_LETTERS
+LETTER_TO_IDX = {}
+for idx, letter in enumerate(TARGET_LETTERS):
+    if len(letter) == 1:
+        LETTER_TO_IDX[ord(letter.lower())] = idx
+        LETTER_TO_IDX[ord(letter.upper())] = idx
+
+# Create output directories
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 for letter in TARGET_LETTERS:
     os.makedirs(os.path.join(OUTPUT_DIR, letter), exist_ok=True)
+
+def count_existing(letter):
+    letter_dir = os.path.join(OUTPUT_DIR, letter)
+    if os.path.exists(letter_dir):
+        return len([f for f in os.listdir(letter_dir) if f.endswith('.jpg')])
+    return 0
 
 mp_hands   = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
@@ -47,24 +61,41 @@ if not cap.isOpened():
     exit()
 
 print("=" * 60)
-print("ASL WEBCAM TRAINING DATA CAPTURE")
+print("ASL WEBCAM TRAINING DATA CAPTURE (224x224)")
 print("=" * 60)
 print(f"Target letters: {', '.join(TARGET_LETTERS)}")
 print(f"Images per letter: {CAPTURES_PER_LETTER}")
 print(f"Save location: {OUTPUT_DIR}/")
 print()
 print("Controls:")
-print("  SPACE  = Start / Pause capturing")
-print("  N      = Skip to next letter")
-print("  Q      = Quit")
-print("=" * 60)
+print("  SPACE      = Start / Pause capturing")
+print("  TAB        = Skip to next letter")
+print("  A-Z keys   = Jump directly to that letter")
+print("  ESC        = Quit")
 print()
-print(f"First letter: {TARGET_LETTERS[0]}")
-print("Hold up the sign and press SPACE to start capturing.")
+
+# Show existing counts
+print("Existing images:")
+any_existing = False
+for letter in TARGET_LETTERS:
+    existing = count_existing(letter)
+    if existing > 0:
+        print(f"  {letter}: {existing} images")
+        any_existing = True
+if not any_existing:
+    print("  (none)")
+print("New images will APPEND (not overwrite).")
+print("=" * 60)
+
+def switch_to(idx):
+    letter = TARGET_LETTERS[idx]
+    existing = count_existing(letter)
+    print(f"\nLetter: {letter} ({existing} existing)")
+    return existing, 0
 
 current_letter_idx = 0
 capturing = False
-capture_count = 0
+existing_count, capture_count = switch_to(0)
 last_capture_time = 0
 
 while cap.isOpened() and current_letter_idx < len(TARGET_LETTERS):
@@ -73,8 +104,8 @@ while cap.isOpened() and current_letter_idx < len(TARGET_LETTERS):
         break
 
     current_letter = TARGET_LETTERS[current_letter_idx]
+    total_for_letter = existing_count + capture_count
 
-    # Process hand detection on clean frame BEFORE drawing landmarks
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     results = hands.process(rgb_frame)
 
@@ -87,7 +118,6 @@ while cap.isOpened() and current_letter_idx < len(TARGET_LETTERS):
         x_coords = [lm.x * w for lm in hand_landmarks.landmark]
         y_coords = [lm.y * h for lm in hand_landmarks.landmark]
 
-        # Square crop with generous padding (matches live_asl3.py)
         padding = 80
         x_min = max(0, int(min(x_coords)) - padding)
         y_min = max(0, int(min(y_coords)) - padding)
@@ -105,41 +135,37 @@ while cap.isOpened() and current_letter_idx < len(TARGET_LETTERS):
             x_min = max(0, x_min - diff // 2)
             x_max = min(w, x_max + (diff - diff // 2))
 
-        # Crop BEFORE drawing landmarks so saved images are clean
         crop = frame[y_min:y_max, x_min:x_max]
         if crop.size > 0:
             hand_crop = cv2.resize(crop, IMAGE_SIZE)
 
-        # Draw landmarks on display frame AFTER cropping
         mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
         cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
 
-    # Save crops while capturing
-    if capturing and hand_crop is not None and capture_count < CAPTURES_PER_LETTER:
+    remaining = CAPTURES_PER_LETTER - total_for_letter
+    if capturing and hand_crop is not None and remaining > 0:
         now = time.time()
         if now - last_capture_time >= CAPTURE_DELAY:
             letter_dir = os.path.join(OUTPUT_DIR, current_letter)
-            filename = os.path.join(letter_dir, f"webcam_{current_letter}_{capture_count:04d}.jpg")
+            file_num = existing_count + capture_count
+            filename = os.path.join(letter_dir, f"webcam_{current_letter}_{file_num:04d}.jpg")
             cv2.imwrite(filename, hand_crop)
             capture_count += 1
+            total_for_letter = existing_count + capture_count
             last_capture_time = now
 
-        # Auto-stop when target reached
-        if capture_count >= CAPTURES_PER_LETTER:
+        if total_for_letter >= CAPTURES_PER_LETTER:
             capturing = False
-            print(f"  Done! Captured {capture_count}/{CAPTURES_PER_LETTER} for '{current_letter}'")
-            print(f"  Press N to move to next letter, or SPACE to capture more.")
+            print(f"  Done! {current_letter}: {total_for_letter} total ({capture_count} new)")
 
-    # ── Display info ──────────────────────────────────────────────────────
     h, w, _ = frame.shape
 
-    # Current letter and status
     if capturing:
         color = (0, 0, 255)
         status = "CAPTURING... (SPACE to pause)"
-    elif capture_count >= CAPTURES_PER_LETTER:
+    elif total_for_letter >= CAPTURES_PER_LETTER:
         color = (0, 200, 0)
-        status = "COMPLETE! (N for next letter)"
+        status = "COMPLETE! (TAB for next)"
     else:
         color = (255, 255, 255)
         status = "Ready (SPACE to start)"
@@ -149,72 +175,75 @@ while cap.isOpened() and current_letter_idx < len(TARGET_LETTERS):
     cv2.putText(frame, status, (10, 80),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    # Progress bar
-    progress = capture_count / CAPTURES_PER_LETTER
+    progress = min(1.0, total_for_letter / CAPTURES_PER_LETTER)
     bar_w = 300
-    bar_h = 20
-    bar_x = 10
-    bar_y = 100
+    bar_x, bar_y, bar_h = 10, 100, 20
     cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (100, 100, 100), -1)
-    fill_color = (0, 255, 0) if capture_count >= CAPTURES_PER_LETTER else (0, 165, 255)
+    fill_color = (0, 255, 0) if total_for_letter >= CAPTURES_PER_LETTER else (0, 165, 255)
     cv2.rectangle(frame, (bar_x, bar_y), (bar_x + int(bar_w * progress), bar_y + bar_h), fill_color, -1)
-    cv2.putText(frame, f"{capture_count}/{CAPTURES_PER_LETTER}", (bar_x + bar_w + 10, bar_y + 16),
+    cv2.putText(frame, f"{total_for_letter}/{CAPTURES_PER_LETTER} ({capture_count} new)",
+                (bar_x + bar_w + 10, bar_y + 16),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-    # Overall progress
-    overall = f"Letter {current_letter_idx + 1}/{len(TARGET_LETTERS)}: {current_letter}"
-    cv2.putText(frame, overall, (10, h - 20),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 1)
+    cv2.putText(frame, f"Letter {current_letter_idx + 1}/{len(TARGET_LETTERS)}: {current_letter}",
+                (10, h - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 1)
+    cv2.putText(frame, "A-Z=jump | TAB=next | ESC=quit",
+                (10, h - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (140, 140, 140), 1)
 
-    # No hand warning
     if results.multi_hand_landmarks is None:
         cv2.putText(frame, "No hand detected", (10, h // 2),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
-    # Show preview of crop in corner
     if hand_crop is not None:
         preview = cv2.resize(hand_crop, (120, 120))
         frame[10:130, w - 130:w - 10] = preview
 
-    cv2.imshow('ASL Capture', frame)
+    cv2.imshow('ASL Capture (224x224)', frame)
 
-    key = cv2.waitKey(1) & 0xFF
-    if key == ord('q'):
-        print(f"\nQuitting early. Saved {capture_count} images for '{current_letter}'.")
+    raw_key = cv2.waitKey(1)
+    key = raw_key & 0xFF
+
+    if key == 27:
+        print(f"\nQuitting. Saved {capture_count} new for '{current_letter}'.")
         break
-    elif key == ord(' '):
+    elif key == 32:
         if not capturing:
             capturing = True
             print(f"  Capturing '{current_letter}'...")
         else:
             capturing = False
-            print(f"  Paused at {capture_count}/{CAPTURES_PER_LETTER}")
-    elif key == ord('n'):
+            print(f"  Paused at {total_for_letter} total ({capture_count} new)")
+    elif key == 9:
         capturing = False
-        print(f"  Moving on from '{current_letter}' ({capture_count} images saved)")
+        if capture_count > 0:
+            print(f"  {current_letter}: saved {capture_count} new ({total_for_letter} total)")
         current_letter_idx += 1
-        capture_count = 0
         if current_letter_idx < len(TARGET_LETTERS):
-            print(f"\nNext letter: {TARGET_LETTERS[current_letter_idx]}")
-            print("Hold up the sign and press SPACE to start capturing.")
+            existing_count, capture_count = switch_to(current_letter_idx)
+    elif key in LETTER_TO_IDX:
+        jump_idx = LETTER_TO_IDX[key]
+        if jump_idx != current_letter_idx:
+            capturing = False
+            if capture_count > 0:
+                print(f"  {current_letter}: saved {capture_count} new ({total_for_letter} total)")
+            current_letter_idx = jump_idx
+            existing_count, capture_count = switch_to(current_letter_idx)
 
 cap.release()
 cv2.destroyAllWindows()
 
-# ── Print summary ─────────────────────────────────────────────────────────────
 print("\n" + "=" * 60)
 print("CAPTURE SUMMARY")
 print("=" * 60)
 total = 0
+complete = 0
 for letter in TARGET_LETTERS:
-    letter_dir = os.path.join(OUTPUT_DIR, letter)
-    if os.path.exists(letter_dir):
-        count = len([f for f in os.listdir(letter_dir) if f.endswith('.jpg')])
-        status = "OK" if count >= CAPTURES_PER_LETTER else "LOW"
-        print(f"  {letter}: {count} images [{status}]")
-        total += count
-    else:
-        print(f"  {letter}: 0 images [MISSING]")
-print(f"\nTotal: {total} images saved to '{OUTPUT_DIR}/'")
-print("\nNext step: Upload the 'webcam_training_data' folder to Google Colab")
-print("and run the training script.")
+    count = count_existing(letter)
+    status = "OK" if count >= CAPTURES_PER_LETTER else "NEED MORE"
+    print(f"  {letter}: {count} images [{status}]")
+    total += count
+    if count >= CAPTURES_PER_LETTER:
+        complete += 1
+print(f"\nTotal: {total} images in '{OUTPUT_DIR}/'")
+print(f"Complete: {complete}/{len(TARGET_LETTERS)} letters")
+print(f"\nNext step: Zip and upload 'webcam_training_data_224' to Google Colab")

@@ -27,3 +27,8 @@ asl_dataset/       # your ASL dataset folder
 # Editor / IDE
 .vscode/
 *.code-workspace
+
+webcam_training_data/
+webcam_training_data_224/
+webcam_training_data_224_v21000images/
+*.zip

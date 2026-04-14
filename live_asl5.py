@@ -7,24 +7,24 @@ import numpy as np
 import json
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Model 1: 27-class general model (224x224)
-WEIGHTS_MAIN   = 'asl_model4_27class.weights.h5'
-CLASSES_MAIN   = 'class_names4.json'
-IMAGE_SIZE_MAIN = (224, 224)
+# Model 1: 27-class general model (160x160)
+WEIGHTS_MAIN    = 'asl_model4_27class.weights.h5'
+CLASSES_MAIN    = 'class_names4.json'
+IMAGE_SIZE_MAIN = (160, 160)
 
 # Model 2: 5-class specialist for confusable letters (160x160)
-WEIGHTS_SPEC   = 'asl_model_5class.weights.h5'
-CLASSES_SPEC   = 'class_names_5class.json'
+WEIGHTS_SPEC    = 'asl_model_5class.weights.h5'
+CLASSES_SPEC    = 'class_names_5class.json'
 IMAGE_SIZE_SPEC = (160, 160)
 
-# When Model 1 predicts one of these AND confidence is below this threshold,
+# When Model 1 predicts one of these AND confidence is below threshold,
 # Model 2 gets consulted for a second opinion
 CONFUSABLE      = ['A', 'M', 'N', 'O', 'T']
 HANDOFF_THRESH  = 0.85
 
 CONF_THRESH     = 0.3
 TOP_N           = 3
-AGREE_COUNT     = 6   # Consecutive agreement frames to lock in prediction
+AGREE_COUNT     = 1
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Load class names ──────────────────────────────────────────────────────────
@@ -33,8 +33,7 @@ try:
         class_names_main = json.load(f)
     print(f"Model 1: Loaded {len(class_names_main)} classes: {class_names_main}")
 except FileNotFoundError:
-    class_names_main = [chr(65 + i) for i in range(26) if chr(65 + i) not in ('J', 'Z')]
-    class_names_main.append('space')
+    class_names_main = [chr(65 + i) for i in range(26)] + ['space']
     print("Warning: class_names4.json not found — using fallback.")
 
 try:
@@ -48,7 +47,7 @@ except FileNotFoundError:
 NUM_MAIN = len(class_names_main)
 NUM_SPEC = len(class_names_spec)
 
-# ── Build Model 1: 27-class (224x224) ─────────────────────────────────────────
+# ── Build Model 1: 27-class (160x160) ────────────────────────────────────────
 print("\nBuilding Model 1 (27-class)...")
 aug_main = keras.Sequential([
     layers.RandomFlip("horizontal"),
@@ -140,11 +139,11 @@ print("Webcam opened. Press 'q' to quit.")
 
 # ── Consecutive agreement state ───────────────────────────────────────────────
 consecutive_count  = 0
-last_raw_class     = -1
+last_raw_label     = ""
 stable_label       = ""
 stable_confidence  = 0.0
 stable_top_guesses = []
-stable_source      = ""  # "Model 1" or "Model 2"
+stable_source      = ""
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -166,7 +165,6 @@ while cap.isOpened():
         x_coords = [lm.x * w for lm in hand_landmarks.landmark]
         y_coords = [lm.y * h for lm in hand_landmarks.landmark]
 
-        # ── Square crop with generous padding ─────────────────────────────
         padding = 80
         x_min = max(0, int(min(x_coords)) - padding)
         y_min = max(0, int(min(y_coords)) - padding)
@@ -198,7 +196,6 @@ while cap.isOpened():
         conf_main       = float(pred_main[0][class_idx_main])
         label_main      = class_names_main[class_idx_main]
 
-        # Top N from Model 1
         top_indices = np.argsort(pred_main[0])[::-1][:TOP_N]
         frame_guesses = [
             (class_names_main[i], float(pred_main[0][i]))
@@ -220,13 +217,11 @@ while cap.isOpened():
             conf_spec      = float(pred_spec[0][class_idx_spec])
             label_spec     = class_names_spec[class_idx_spec]
 
-            # Only override if specialist is more confident
             if conf_spec > conf_main:
                 final_label = label_spec
                 final_conf  = conf_spec
                 source      = "Model 2"
 
-                # Update top guesses from specialist
                 top_spec = np.argsort(pred_spec[0])[::-1][:TOP_N]
                 frame_guesses = [
                     (class_names_spec[i], float(pred_spec[0][i]))
@@ -234,12 +229,11 @@ while cap.isOpened():
                 ]
 
         # ── Consecutive agreement ─────────────────────────────────────────
-        # Use the final label (after potential Model 2 override) for agreement
-        if final_label == last_raw_class:
+        if final_label == last_raw_label:
             consecutive_count += 1
         else:
             consecutive_count = 1
-            last_raw_class = final_label
+            last_raw_label = final_label
 
         if consecutive_count >= AGREE_COUNT:
             stable_label       = final_label
@@ -249,7 +243,6 @@ while cap.isOpened():
 
         display_guesses = stable_top_guesses
 
-        # Display stable prediction
         if stable_label:
             if stable_confidence >= CONF_THRESH:
                 predicted_text  = f"Predicted: {stable_label}"
@@ -261,7 +254,6 @@ while cap.isOpened():
         else:
             predicted_text = "Analyzing..."
 
-        # Draw landmarks and box
         mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
         cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
 
@@ -272,7 +264,6 @@ while cap.isOpened():
     cv2.putText(frame, confidence_text, (10, 75),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 0), 2)
 
-    # Show which model is active
     if source_text:
         color = (255, 200, 0) if source_text == "Model 2" else (200, 200, 200)
         cv2.putText(frame, f"[{source_text}]", (10, 105),
