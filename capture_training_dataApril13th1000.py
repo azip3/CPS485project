@@ -22,7 +22,7 @@ import time
 # ── Config ────────────────────────────────────────────────────────────────────
 IMAGE_SIZE          = (224, 224)
 OUTPUT_DIR          = 'webcam_training_data_224_v21000images'
-CAPTURES_PER_LETTER = 1000           # 1000 images per letter
+CAPTURES_PER_LETTER = 2500           # 1000 images per letter
 CAPTURE_DELAY       = 0.15
 TARGET_LETTERS      = [chr(65 + i) for i in range(26)]  # A-Z (all 26)
 TARGET_LETTERS.append('space')                            # 27 total
