@@ -19,8 +19,11 @@ htmlcov/
 .LSOverride
 
 # Large files / data
-*.h5               # model files (add if large)
-asl_dataset/       # your ASL dataset folder
+#*.h5
+#*.weights.h5
+asl_dataset/
+asl_alphabet_train/
+asl_alphabet_test/
 *.zip
 *.tar.gz
 
@@ -28,7 +31,12 @@ asl_dataset/       # your ASL dataset folder
 .vscode/
 *.code-workspace
 
-webcam_training_data/
-webcam_training_data_224/
-webcam_training_data_224_v21000images/
-*.zip
+# ASL project: webcam captures and pools (any session, any resolution)
+webcam_training_data*/
+webcam_val*/
+webcam_test*/
+webcam_only_pool/
+
+# ASL project: training artifacts
+class_names*.json
+#_archive/
