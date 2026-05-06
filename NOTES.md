@@ -235,3 +235,199 @@ Started training on self captured data. Captures 300 images of my own hand makin
 # Purpose: Targeted test to improve accuracy on confusable closed-fist letters
 # Use with: live_asl3.py (change MODEL_PATH and CLASSES_FILE)
 # ──────────────────────────────────────────────────────────────────────
+## 4/7 - 4/13
+ 
+### 5-Class Specialist Model Results & Keras Version Fix
+ 
+- 5-class specialist (A, M, N, O, T) trained successfully on Colab with ~3,300 images/class (3,000 Kaggle + 300 webcam)
+- Model performed well on live webcam for those 5 letters — confirmed that webcam captures meaningfully close the domain gap even at only ~10% of training data
+- A was occasionally confused unless hand was turned straight toward camera, but overall a positive sign
+- **Critical issue encountered**: `.keras` model files from Colab would not load on local Mac due to Keras version mismatch
+  - Colab runs Keras 3.x which includes `quantization_config` metadata in saved Dense layer configs
+  - Local Mac's older Keras cannot deserialize this metadata — fails on both `.keras` and `.h5` formats
+  - **Fix**: Save weights only with `model.save_weights()` in Colab, rebuild the identical architecture locally in the live script, then call `model.load_weights()`
+  - Architecture in live script must EXACTLY match training (same layers, same sizes, same dropout, same number of fine-tune layers) or weight loading fails
+  - This approach works because weights are just numpy arrays — no version-dependent metadata
+- Also created the "demonstration" model: retrained the original bad model (black background dataset, 36 classes) with bugs fixed (no double preprocessing, correct image size) for side-by-side comparison during midterm demo
+  - Saved as `asl_modelDemonstration_v2.weights.h5` using same weights-only approach
+### Scaling to Full 27-Class Model
+ 
+- Attempted full 27-class training at multiple resolutions:
+  - 224×224: Crashed Colab Pro RAM repeatedly (with 3,000 images/class + copy step)
+  - 224×224 with in-place trimming to 2,000/class: Still crashed
+  - 224×224 with batch 32, shuffle 500, no copy: Still crashed
+  - **160×160**: Successfully trained with in-place trimming, batch 32, shuffle 500
+- Applied all optimizations from 5-class test: two-phase training, EarlyStopping, ReduceLROnPlateau
+- Added confusion matrix to end of training script — prints per-class accuracy sorted worst-to-best and top 20 confusion pairs
+- Validation accuracy: 99.7% (misleading — dominated by Kaggle images in validation set)
+- Live performance: mediocre. Model collapsed to predicting N for most inputs, with correct letter sometimes appearing in top 3
+### Domain Gap & Crop Improvements
+ 
+- Identified domain gap as primary issue: Kaggle training images have generous framing with backgrounds; live webcam crops were tight (40px padding) and non-square, distorting hand shape during resize
+- **Square crop fix**: Added logic to pad shorter dimension to match longer before resizing — preserves hand proportions
+- **Increased padding**: 40px → 80px to include more context around hand, matching Kaggle image framing
+- These changes immediately improved prediction variety in live inference
+## 4/13 - 4/20
+ 
+### 1,000 Webcam Image Capture Campaign
+ 
+- Built custom capture script (`capture_training_data_224.py`) for systematic webcam data collection
+  - Saves 224×224 square crops using same MediaPipe + square-pad logic as live inference
+  - Crops taken BEFORE drawing landmarks so saved images are clean
+  - Appends to existing data — safe to run multiple times without overwriting
+  - Controls: SPACE=start/pause, TAB=next letter, A-Z=jump to letter, ESC=quit
+  - Progress bar and time estimate displayed during capture
+  - Counts existing images per letter and starts numbering from there
+- Initially excluded J and Z as "motion letters" — later added them back after realizing Kaggle dataset has static frame images for both
+- Captured 1,000 images per letter (26 letters, no space) at 224×224 resolution
+  - Saved to `webcam_training_data_224_v21000images/`
+  - Captured without band-aid (earlier 300-image set had band-aid on hand which could bias model)
+  - Varied hand position: centered, edges of frame, close/far, slight wrist rotation
+  - Captured near presentation building — whiteboard background with natural window light
+### 224×224 Training with Memory Optimizations
+ 
+- Applied all memory optimizations to enable 224×224 training on Colab Pro:
+  - **Mixed precision** (`mixed_float16`): Stores activations/gradients in 16-bit, nearly halving memory
+  - **Batch size 16** (down from 32)
+  - **Shuffle buffer 256** (down from 1000)
+  - **No `.cache()`**: Images load from disk per epoch instead of filling RAM
+  - **In-place merge**: Webcam images copied directly into Kaggle folders — no dataset duplication
+  - **Fine-tune 20 layers** (down from 30) to reduce gradient memory
+  - Final Dense layer explicitly `dtype='float32'` for softmax numerical stability with mixed precision
+- Full 3,000 Kaggle images/class retained (no trimming) + 1,000 webcam images merged in
+- Training completed both phases (50 frozen + 25 fine-tune epochs) without crashing
+- Phase 2 used all 25 epochs without EarlyStopping triggering — model kept improving throughout
+### Two-Stage Model System (live_asl5.py)
+ 
+- Combined the 27-class main model with the 5-class specialist into a single live script
+- **How it works**:
+  - Model 1 (27-class, 224×224) predicts on every frame
+  - If prediction is A, M, N, O, or T AND confidence < 85%, Model 2 (5-class specialist, 160×160) is consulted
+  - If specialist is more confident, its prediction overrides Model 1
+  - For all other letters or when Model 1 is confident, Model 2 never runs
+  - Display shows `[Model 1]` or `[Model 2]` label so user can see which model made the call
+- **Consecutive agreement smoothing**: Display only updates after 6 matching predictions in a row (`AGREE_COUNT = 6`)
+  - Prevents flickering from noisy frame-by-frame predictions
+  - Makes predictions stable and readable during demo
+  - Can be adjusted: lower = more responsive but jumpier, higher = more stable but slower to change
+### Live Performance Assessment
+ 
+- Live performance significantly improved from pre-webcam-capture baseline
+- Validation accuracy: 99.7% (all 27 classes above 90%)
+- Top confusions from confusion matrix: N→M (8), I→J (7), W→V (5), E→I (4), V→U (4)
+- Live problem letters: R, T, P, O (confused with Y), W, D, S, E
+- Discrepancy between 99.7% validation and mediocre live performance confirmed the domain gap issue — validation is ~80% Kaggle images, so EarlyStopping optimizes for Kaggle, not webcam
+- Performance varies significantly with lighting conditions — model struggles in different environments than where webcam images were captured
+## 4/20 - 4/22
+ 
+### Upgrade Planning & Knowledge Transfer
+ 
+- Developed comprehensive upgrade plan with tiered improvements:
+  - **Tier 1 (High impact, easy)**: 256×256 resolution (professor recommended multiples of 8 for GPU alignment), webcam-only validation, label smoothing, AdamW optimizer, cosine annealing LR
+  - **Tier 2 (High impact, moderate)**: EfficientNetB2 backbone, 40-50 fine-tune layers, 2,000-3,000 webcam images/class across 4-5 locations, test-time augmentation
+  - **Tier 3 (Medium impact, easy)**: Unfreeze BatchNorm in Phase 2, class weights for confusable letters, LR warmup, increase dropout to 0.4
+  - **Tier 4 (Medium impact, more effort)**: Model ensemble, CutMix/MixUp augmentation, multi-signer captures
+- Professor feedback on mid-project poster: improve contrast/readability, streamline demo, update README with architecture details
+- Created complete project knowledge transfer document for continuing work in new conversation — includes full bug history, file inventory, current code, architecture details, and upgrade plan
+- Created research poster (42×34" format) with diagrams: inference pipeline flow, two-stage classification decision chart, training pipeline visualization, model evolution timeline
+- Professor feedback on poster: remove tech from overview, just list tech stack, more detail on model architecture, combine preprocessing in pipeline, shrink acknowledgements, bigger more readable text
+- Iterated on poster through v4 addressing all feedback — expanded Model Architecture section with four subsections (Why Transfer Learning, Backbone, Classification Head, Built-In Preprocessing)
+## 4/22 - 4/29
+ 
+### Comprehensive Code Review & Pipeline Rewrite
+ 
+- Did a full code review of the existing training, inference, and capture scripts. Found several issues that
+  collectively were responsible for the v4 99.7% validation accuracy not translating to good live performance:
+  - **`RandomFlip("horizontal")` in augmentation was actively poisoning labels.** ASL signs are hand-specific —
+    flipping G horizontally produces something resembling H. Including RandomFlip meant ~50% of training images
+    were labeled wrong. Removed entirely; relying on natural hand-orientation variance instead.
+  - **Random 80/20 validation split was leaking adjacent webcam frames.** Captures happen at ~6.7 fps, so
+    frames 0.15s apart are nearly identical. Random split puts frame N in train and frame N+1 in val — model
+    memorizes specific frames rather than generalizing. This explained the 99.7% validation vs mediocre live gap.
+  - **`model.predict()` in the live loop has graph-rebuild overhead per call.** Designed for batch inference,
+    not single-frame realtime. Switched to `model(x, training=False)` for direct forward-pass calls — 3-8×
+    faster on M1, which is what makes 30 FPS achievable without a GPU.
+  - **Square-crop bug in capture vs inference.** Edge-case hands near frame borders were silently stretched at
+    training time but zero-padded at inference. Built a single shared `square_crop_with_padding` function used
+    identically by capture, training, and live scripts to guarantee distribution consistency.
+  - **Two-stage specialist had structural confidence bias.** A 5-class softmax peaks higher than a 27-class
+    softmax just by having fewer classes to spread probability over, so the specialist almost always "won" the
+    confidence comparison even when it was wrong. Scrapped the specialist; single-model architecture is simpler
+    and the data improvements made it redundant.
+  - **Class imbalance from 3:1 Kaggle:webcam ratio.** Phase 1 was dominated by Kaggle images. Phase 2 is now
+    webcam-only to fix this without reducing Phase 1 volume.
+  - **Shuffle buffer applied after batching** in some code paths — was shuffling batches not samples.
+### Architectural Decisions for the Final Iteration
+ 
+- **Kept MobileNetV2 over EfficientNetB2.** Rationale: ~3× faster on M1 inference, accuracy isn't the
+  bottleneck for this task — distribution shift is. Speed-accuracy tradeoff strongly favors MobileNetV2.
+- **Bumped input size 224×224 → 256×256.** 256 is divisible by MobileNetV2's stride of 32 (256/32 = 8 clean),
+  produces a clean 8×8 final feature map, slight accuracy gain for modest compute cost.
+- **Skipped TPU.** TPUStrategy rewrite wasn't worth it; A100 on Colab Pro+ is faster for this model anyway.
+- **Two-phase training with split data sources.**
+  - Phase 1: frozen backbone, Kaggle + webcam combined (~163k images) — head learns 27-class discrimination
+    with maximum diversity
+  - Phase 2: top 40 layers unfrozen, webcam-only (~82k images) — backbone adapts to deployment distribution
+    without being pulled back toward Kaggle-style images
+- **AdamW + CosineDecay + label smoothing 0.1.** AdamW handles weight decay correctly (Adam's
+  weight_decay parameter modifies the gradient instead, which interacts badly with adaptive LR). CosineDecay
+  is a deterministic schedule — doesn't depend on possibly-leaky validation feedback like ReduceLROnPlateau
+  does. Label smoothing is free regularization that prevents overconfidence.
+- **Mixed precision (float16) with float32 master weights** — ~2× faster on A100 with no accuracy loss.
+- **BatchNorm kept in inference mode during fine-tuning** (`base(x, training=False)`). With small batches and
+  the relatively small Phase 2 dataset, training-mode BN statistics are noisy. Inference-mode uses reliable
+  population statistics from pretraining. This is the recommended Keras transfer learning pattern.
+### Three Production Scripts (Final iteration)
+ 
+- **`train_asl_Final.py`** — split-phase training with session-separated validation
+- **`live_asl_Final.py`** — single-model inference, square_crop_with_padding, 6-frame agreement smoothing,
+  `model(x, training=False)` for speed
+- **`capture_training_data_Final.py`** — 256×256 captures with identical crop function as live script,
+  `SKIP_PADDED_CROPS=True` flag (refuses to save edge-case captures with black bars), 2000 captures per
+  letter cap, append-mode safe across multiple sessions
+### Multi-Session Data Capture (~3,050 imgs/letter)
+ 
+- Captured ~3,050 images per letter across **6 distinct conditions** in the demo building, deliberately chosen
+  to break shortcut learning:
+  1. **Main area** — natural top + window light, white wall background
+  2. **Dim room** — blank wall, low ambient light
+  3. **Whiteboard** — with handwritten content (lines, shapes)
+  4. **Wood panel** — textured non-blank surface vs. white-wall bias
+  5. **Bookshelf** — cluttered with chair, books, frames
+  6. **Yellow wall** — different room, color-cast lighting
+- Decisions made mid-capture:
+  - Brown sweatshirt mid-session was OK for most letters — concerns about M/N (loose fabric in lower frame
+    making fist letters look different) addressed by raising hand position so cuff doesn't dominate.
+  - Bandaid on cut knuckle was non-issue — hand shape is what matters, not skin texture.
+  - **Letter-correlated background area flagged as real concern.** For fist letters (M, N) the wrist angles
+    toward camera, exposing more sweater area; for open-hand letters (B, L) the wrist faces away. That's a
+    real correlation the model could exploit. Solution: keep clothing constant within a session, vary across
+    sessions, raise hand position.
+  - Skipped sunny-day captures due to time. ~70 minutes of additional capture beyond initial sessions.
+- Class imbalance: 'space' was at ~1300 mid-capture, captured 1300 more to bring to ~2600 (still slightly
+  under others but workable). Letter X ended up at 3500 (extra captures from earlier session before class
+  cap was enforced).
+### Final Training Run Results
+ 
+- Trained on Colab Pro+ A100. Total time: **~70 minutes** (vs 17 hours on TPU v6 for v4). Better data, less
+  compute, more honest result.
+- Phase 1 (frozen backbone, Kaggle + webcam, ~163k images):
+  - 30 epochs max, EarlyStopping at epoch 12, best at epoch 5
+  - Final: **84.2% val accuracy**
+- Phase 2 (top 40 layers unfrozen, webcam-only, ~82k images):
+  - 20 epochs max, EarlyStopping at epoch 20, best at epoch 15
+  - Final: **98.3% val accuracy** on session-separated validation set (6,830 images held out from a separate
+    capture session on a different day in a different room)
+- Per-class breakdown:
+  - 21 of 27 letters at ≥99% accuracy
+  - 7 letters at perfect 100%: B, C, F, G, H, J, L, M, P, Q, S, T, W, space (some shared)
+  - **Letter E at 78.7%** — all 54 errors were E predicted as S (closed-fist visual ambiguity, both signs
+    differ only in subtle thumb/finger placement)
+  - Other notable: I→J (13), X→S (8), D→O (7), U→H (7)
+- Phase 2 fine-tuning lifted accuracy from 84.2% → 98.3% — strong evidence the split-phase approach is
+  worth the complexity. Adapting the backbone to deployment distribution is responsible for ~14 percentage
+  points of the gap.
+- Validation methodology: **session-separated** (not random-split). Held-out set captured on a different day,
+  in a different room, with different backgrounds. The 98.3% is honest — it predicts deployment performance,
+  unlike v4's 99.7% which was inflated by random-split leakage.
+## 4/29 - 5/2

@@ -3,18 +3,24 @@
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # Captures clean 256×256 hand crops for training and validation. Uses the
-# IDENTICAL crop pipeline as live_asl_Final.py, so training-time crops match
-# inference-time crops exactly.
+# IDENTICAL crop arithmetic as live_asl_Final.py, so training-time crops
+# match inference-time crops exactly.
 #
-# Changes from capture_training_data_224.py:
-#   * Saves at 256×256 (matches train_asl_Final.py).
-#   * Uses square_crop_with_padding (zero-pads when hand near frame edge),
-#     matching the live script. The old logic clipped the bbox at the edges
-#     and let cv2.resize stretch a non-square rectangle into a square, which
-#     means hands near the edge of the frame ended up subtly distorted in
-#     training data — a quiet version of the same distortion bug you'd get
-#     at inference time.
-#   * Identical 80px PADDING to live_asl_Final.py.
+# Notes since the previous version:
+#   * CAPTURES_PER_LETTER bumped from 1000 to 2000. The cap is just a
+#     disk-safety guardrail; you stop when YOU decide via TAB/ESC. 2000
+#     leaves headroom for training (1500 target), validation (~400), and
+#     test (~200) without ever silently cutting you off.
+#   * SKIP_PADDED_CROPS flag added (default ON). When the hand is close to
+#     a frame edge, the desired square bbox runs out of room — the old
+#     behavior was to zero-pad with black bars and save anyway, putting
+#     unnatural artifacts into your training data. With this flag on, those
+#     captures are SKIPPED instead, and the HUD shows a red "EDGE — move
+#     hand inward" warning so you know to reposition.
+#   * The crop function in live_asl_Final.py is unchanged: at inference,
+#     skip_if_padded defaults to False, so the model still produces a guess
+#     when the user's hand strays to the edge at demo time. This asymmetry
+#     is intentional — clean training data, robust inference.
 #
 # Controls (focus the OpenCV window first — click on it):
 #   SPACE  — start / pause capturing for the current letter
@@ -44,10 +50,12 @@ import time
 # ══════════════════════════════════════════════════════════════════════════════
 
 IMAGE_SIZE          = (256, 256)                          # MUST match training
-OUTPUT_DIR          = 'webcam_training_data_Final'        # change for val/test sessions
-CAPTURES_PER_LETTER = 2000
+#OUTPUT_DIR          = 'webcam_training_data_Final'        # change for val/test sessions
+OUTPUT_DIR          = 'webcam_val_Final'                  # validation session
+CAPTURES_PER_LETTER = 3500                                # safety cap, not a target
 CAPTURE_DELAY       = 0.15                                # seconds between captures
 PADDING             = 80                                  # MUST match live_asl_Final.py
+SKIP_PADDED_CROPS   = True                                # skip captures needing black bars
 
 TARGET_LETTERS = [chr(65 + i) for i in range(26)]
 TARGET_LETTERS.append('space')
@@ -61,16 +69,24 @@ for idx, letter in enumerate(TARGET_LETTERS):
 LETTER_TO_IDX[ord(' ')] = TARGET_LETTERS.index('space')   # space bar → 'space' label
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Crop helper — IDENTICAL to live_asl_Final.py.square_crop_with_padding
+# Crop helper — same arithmetic as live_asl_Final.py.square_crop_with_padding,
+# with one added option: skip_if_padded. When True, returns None (rather than
+# zero-padding) if the desired square bbox extends past the frame edge.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def square_crop_with_padding(frame, x_min, y_min, x_max, y_max, target_size):
+def square_crop_with_padding(frame, x_min, y_min, x_max, y_max, target_size,
+                             skip_if_padded=False):
     """Crop the hand region and produce a truly square output of target_size.
 
-    Guarantees squareness by zero-padding when the desired square bbox
-    exceeds frame bounds. Must remain identical to the version in
-    live_asl_Final.py — otherwise capture-time and inference-time crops
-    diverge and the model sees a distribution shift.
+    When skip_if_padded=False (the live-inference default), zero-pads with
+    black borders if the desired square bbox exceeds frame bounds. This
+    preserves the model's ability to handle hands at the edge of the camera
+    at runtime.
+
+    When skip_if_padded=True (the capture default), returns None instead of
+    padding. This keeps the saved training data free of artificial black
+    bars that could become a spurious feature ("long letters get black
+    bars") for the model to shortcut on.
     """
     h, w = frame.shape[:2]
 
@@ -90,6 +106,10 @@ def square_crop_with_padding(frame, x_min, y_min, x_max, y_max, target_size):
     pad_right  = max(0, sq_x_max - w)
     pad_bottom = max(0, sq_y_max - h)
 
+    needs_padding = bool(pad_left or pad_top or pad_right or pad_bottom)
+    if needs_padding and skip_if_padded:
+        return None
+
     x0 = max(0, sq_x_min)
     y0 = max(0, sq_y_min)
     x1 = min(w, sq_x_max)
@@ -98,7 +118,7 @@ def square_crop_with_padding(frame, x_min, y_min, x_max, y_max, target_size):
     if crop.size == 0:
         return None
 
-    if pad_left or pad_top or pad_right or pad_bottom:
+    if needs_padding:
         crop = cv2.copyMakeBorder(
             crop, pad_top, pad_bottom, pad_left, pad_right,
             borderType=cv2.BORDER_CONSTANT, value=(0, 0, 0),
@@ -140,7 +160,8 @@ if not cap.isOpened():
     print("Error: could not open webcam.")
     raise SystemExit(1)
 
-print(f"Output: {OUTPUT_DIR}/  (target: {CAPTURES_PER_LETTER} per letter)")
+print(f"Output: {OUTPUT_DIR}/  (cap: {CAPTURES_PER_LETTER} per letter)")
+print(f"Skip padded crops: {SKIP_PADDED_CROPS}")
 print("\nControls (click the video window first):")
 print("  SPACE   start/pause capturing")
 print("  TAB     next letter")
@@ -155,6 +176,7 @@ current_idx       = 0
 capturing         = False
 last_capture_time = 0.0
 session_count     = 0
+session_skipped   = 0
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -168,9 +190,10 @@ while cap.isOpened():
     existing       = count_existing(current_letter)
     remaining      = max(0, CAPTURES_PER_LETTER - existing)
 
-    hand_seen = False
-    crop_for_save = None
+    hand_seen        = False
+    crop_for_save    = None
     bbox_for_display = None
+    at_edge          = False
 
     if results.multi_hand_landmarks:
         hand_seen = True
@@ -185,40 +208,46 @@ while cap.isOpened():
         x_max = int(max(x_coords)) + PADDING
         y_max = int(max(y_coords)) + PADDING
 
-        # IMPORTANT: build the crop BEFORE drawing landmarks on the frame, so
-        # the saved image is clean (no green skeleton overlay).
-        crop_for_save    = square_crop_with_padding(
+        # Build crop BEFORE drawing landmarks on the frame, so saved files
+        # are clean (no green skeleton overlay).
+        crop_for_save = square_crop_with_padding(
             frame, x_min, y_min, x_max, y_max, IMAGE_SIZE,
+            skip_if_padded=SKIP_PADDED_CROPS,
         )
+        # If skip_if_padded returned None for an in-frame hand, we're at an edge
+        at_edge = (crop_for_save is None and SKIP_PADDED_CROPS)
         bbox_for_display = (max(0, x_min), max(0, y_min),
                             min(w, x_max),  min(h, y_max))
 
-    # Save (only if capturing, hand seen, crop succeeded, delay elapsed,
+    # Save (only if capturing, hand seen, crop is valid, delay elapsed,
     # and we haven't hit the per-letter cap)
     now = time.time()
-    if (capturing
-            and hand_seen
-            and crop_for_save is not None
-            and remaining > 0
-            and (now - last_capture_time) >= CAPTURE_DELAY):
-        ts        = int(now * 1000)
-        filename  = f"{current_letter}_{ts}.jpg"
-        save_path = os.path.join(OUTPUT_DIR, current_letter, filename)
-        cv2.imwrite(save_path, crop_for_save)
-        last_capture_time = now
-        session_count    += 1
-        existing         += 1
-        remaining         = max(0, CAPTURES_PER_LETTER - existing)
+    delay_elapsed = (now - last_capture_time) >= CAPTURE_DELAY
+    if capturing and hand_seen and remaining > 0 and delay_elapsed:
+        if crop_for_save is not None:
+            ts        = int(now * 1000)
+            filename  = f"{current_letter}_{ts}.jpg"
+            save_path = os.path.join(OUTPUT_DIR, current_letter, filename)
+            cv2.imwrite(save_path, crop_for_save)
+            last_capture_time = now
+            session_count    += 1
+            existing         += 1
+            remaining         = max(0, CAPTURES_PER_LETTER - existing)
+        elif at_edge:
+            # Honor the delay so the skip counter doesn't run away frame-by-frame
+            session_skipped  += 1
+            last_capture_time = now
 
     # ── HUD overlay (drawn AFTER any save, so the saved file stays clean) ──
     if results.multi_hand_landmarks:
         mp_drawing.draw_landmarks(frame, results.multi_hand_landmarks[0],
                                   mp_hands.HAND_CONNECTIONS)
     if bbox_for_display is not None:
+        bbox_color = (0, 0, 255) if at_edge else (0, 255, 0)
         cv2.rectangle(frame,
                       (bbox_for_display[0], bbox_for_display[1]),
                       (bbox_for_display[2], bbox_for_display[3]),
-                      (0, 255, 0), 2)
+                      bbox_color, 2)
 
     status_color = (0, 255, 0) if capturing else (0, 165, 255)
     status_text  = "CAPTURING" if capturing else "PAUSED"
@@ -226,11 +255,16 @@ while cap.isOpened():
                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
     cv2.putText(frame, f"{status_text}  ({existing}/{CAPTURES_PER_LETTER})", (10, 75),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
-    cv2.putText(frame, f"Session this run: {session_count}", (10, 105),
+    cv2.putText(frame,
+                f"Session: {session_count} saved   {session_skipped} skipped (edge)",
+                (10, 105),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
     if not hand_seen:
-        cv2.putText(frame, "No hand detected", (10, 140),
+        cv2.putText(frame, "No hand detected", (10, 145),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+    elif at_edge:
+        cv2.putText(frame, "EDGE - move hand inward", (10, 145),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
     cv2.imshow('ASL Capture (Final)', frame)
     key = cv2.waitKey(1) & 0xFF
@@ -238,20 +272,13 @@ while cap.isOpened():
     if key == 27:                                    # ESC → quit
         break
     elif key == ord(' '):                            # SPACE → toggle capture
-        # Special case: only treat SPACE as "save into 'space' folder" when
-        # 'space' is already the active letter; otherwise SPACE means pause/resume.
-        if current_letter == 'space':
-            capturing = not capturing
-        else:
-            capturing = not capturing
+        capturing = not capturing
     elif key == 9:                                   # TAB → next letter
         current_idx = (current_idx + 1) % len(TARGET_LETTERS)
         capturing = False
-    elif key in LETTER_TO_IDX:                       # A-Z → jump
-        # Don't let SPACE-as-keypress also jump to 'space' — already handled above
-        if key != ord(' '):
-            current_idx = LETTER_TO_IDX[key]
-            capturing = False
+    elif key in LETTER_TO_IDX and key != ord(' '):   # A-Z → jump (SPACE handled above)
+        current_idx = LETTER_TO_IDX[key]
+        capturing = False
 
 cap.release()
 cv2.destroyAllWindows()
@@ -260,9 +287,11 @@ cv2.destroyAllWindows()
 # Final summary
 # ══════════════════════════════════════════════════════════════════════════════
 
-print(f"\nSession complete. {session_count} new images saved to {OUTPUT_DIR}/")
+print(f"\nSession complete:")
+print(f"  Saved:   {session_count} new images to {OUTPUT_DIR}/")
+print(f"  Skipped: {session_skipped} edge crops")
 print("\nPer-letter totals:")
 for letter in TARGET_LETTERS:
     count = count_existing(letter)
-    bar = "#" * min(40, count // 25)
+    bar = "#" * min(40, count // 50)
     print(f"  {letter:>5}: {count:>4}  {bar}")
