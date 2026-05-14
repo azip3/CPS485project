@@ -18,25 +18,25 @@ htmlcov/
 .AppleDouble
 .LSOverride
 
-# Large files / data
-#*.h5
-#*.weights.h5
-asl_dataset/
-asl_alphabet_train/
-asl_alphabet_test/
-*.zip
-*.tar.gz
-
 # Editor / IDE
 .vscode/
 *.code-workspace
 
-# ASL project: webcam captures and pools (any session, any resolution)
+# Large data files — never commit
+*.zip
+*.tar.gz
+asl_dataset/
+asl_alphabet_train/
+asl_alphabet_test/
+
+# Webcam captures and pools (any session, any resolution)
 webcam_training_data*/
 webcam_val*/
 webcam_test*/
 webcam_only_pool/
 
-# ASL project: training artifacts
-class_names*.json
-#_archive/
+# Old model weights — archived, don't re-commit if regenerated
+_archive/old_models/*.h5
+_archive/old_models/*.keras
+_archive/old_models/**/*.h5
+_archive/old_models/**/*.keras
